@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>数字人智能语音系统</title>
+  <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tsparticles@2.11.1/tsparticles.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      background-color: #0f172a;
+    }
+    #tsparticles {
+      position: fixed;
+      z-index: -1;
+      width: 100%;
+      height: 100%;
+      top: 0;
+      left: 0;
+    }
+    .glass-card {
+      @apply bg-white/10 backdrop-blur-lg rounded-xl shadow-lg p-6 text-white;
+    }
+    .btn {
+      @apply px-5 py-2.5 rounded-xl shadow-lg hover:scale-105 transition transform text-white inline-flex items-center justify-center gap-2 font-semibold;
+    }
+    .section-title {
+      @apply text-xl font-bold mb-2 text-cyan-300;
+    }
+    /* --- 用于高亮正在播放的文本的样式 --- */
+    .playing-audio-text {
+      color: #34d399; /* 亮绿色 */
+      font-weight: 600;
+    }
+    /* Make sure markdown rendering looks good */
+    .prose ol, .prose ul {
+      list-style-type: disc; /* Default list style */
+      margin-left: 1.25em; /* Tailwind's prose-ul/ol default margin */
+      padding-left: 0;
+    }
+    .prose li {
+      margin-bottom: 0.25em;
+    }
+    .prose p {
+      margin-top: 0.5em;
+      margin-bottom: 0.5em;
+    }
+  </style>
+</head>
+<body class="min-h-screen p-6 text-white relative">
+  <div id="tsparticles"></div>
+
+  <div class="max-w-6xl mx-auto grid gap-6 relative z-10">
+    <div class="glass-card animate__animated animate__fadeInDown">
+      <div class="flex flex-wrap items-center gap-4">
+        <input id="serverAddress" type="text"
+          class="px-4 py-2 rounded-lg border border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-400 text-black w-64 bg-white/80 backdrop-blur-md shadow-inner"
+          placeholder="http://IP:端口" value="http://192.168.2.89:8080" />
+        <select id="appSelector"
+          class="px-4 py-2 rounded-lg border border-cyan-400 text-black w-48 bg-white/80 backdrop-blur-md shadow-inner">
+          <option>正在加载应用...</option>
+        </select>
+        <select id="voiceType"
+          class="px-4 py-2 rounded-lg border border-cyan-400 text-black bg-white/80 backdrop-blur-md shadow-inner">
+          <option value="woman">女声</option>
+          <option value="man">男声</option>
+        </select>
+        <select id="translateSelector"
+          class="px-4 py-2 rounded-lg border border-cyan-400 text-black w-48 bg-white/80 backdrop-blur-md shadow-inner">
+          <option value="">不翻译</option>
+          <option value="zh">中文</option>
+          <option value="en">英文</option>
+          <option value="ja">日文</option>
+          <option value="ko">韩文</option>
+          <option value="fr">法文</option>
+          <option value="de">德文</option>
+          <option value="es">西班牙文</option>
+
+        </select>
+        <input id="deviceIdInput" type="text" value="admin-web" placeholder="请输入设备ID"
+          class="px-4 py-2 rounded-lg border border-cyan-400 text-black w-48 bg-white/80 backdrop-blur-md shadow-inner" />
+      </div>
+      <div class="flex flex-wrap items-center gap-4 mt-4 pt-4 border-t border-white/20">
+        <label for="ttsSpeedRange" class="text-white text-sm">语速 (1.0-2.0):</label>
+        <input type="range" id="ttsSpeedRange" min="1.0" max="2.0" step="0.1" value="1.0"
+          class="w-32 accent-cyan-400 cursor-pointer" />
+        <input type="number" id="ttsSpeedInput" min="1.0" max="2.0" step="0.1" value="1.0"
+          class="px-2 py-1 rounded-lg border border-cyan-400 text-black w-20 bg-white/80 backdrop-blur-md shadow-inner" />
+        
+        <label for="audioFile" class="btn bg-blue-600 hover:bg-blue-700 cursor-pointer">
+          <i class="fas fa-folder-open"></i>选择音频
+        </label>
+        <input type="file" id="audioFile" accept=".wav" hidden />
+        <span id="file-name" class="text-gray-300">未选择文件</span>
+        <button id="submitBtn" disabled
+          class="btn bg-gradient-to-r from-green-500 to-teal-500 hover:from-teal-500 hover:to-green-500 disabled:opacity-50 shadow-lg shadow-teal-500/30 ml-auto">
+          <i class="fas fa-play-circle"></i>开始对话
+        </button>
+        <button id="clearCacheBtn"
+          class="btn bg-gradient-to-r from-red-500 to-pink-500 hover:from-pink-500 hover:to-red-500 shadow-lg shadow-pink-500/30">
+          <i class="fas fa-trash-alt"></i>清空缓存
+        </button>
+      </div>
+    </div>
+
+    <div class="glass-card max-h-[60vh] overflow-y-auto animate__animated animate__fadeIn" id="chatContainer"></div>
+
+    <div class="glass-card animate__animated animate__fadeIn">
+      <div class="flex gap-3 items-center">
+        <input id="manualInput" type="text" placeholder="输入您的问题..." 
+          class="flex-1 px-4 py-3 rounded-lg border border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-400 text-black bg-white/80 backdrop-blur-md shadow-inner" />
+        <button id="sendBtn" 
+          class="btn bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-cyan-500 hover:to-blue-500 shadow-lg shadow-cyan-500/30">
+          <i class="fas fa-paper-plane"></i>发送
+        </button>
+      </div>
+    </div>
+
+    <div id="status" class="text-center text-white hidden">
+      <div class="w-8 h-8 border-4 border-white border-t-blue-400 rounded-full animate-spin mx-auto"></div>
+      <p class="mt-2 animate__animated animate__pulse">正在处理中...</p>
+    </div>
+
+    <div class="glass-card animate__animated animate__fadeInUp" id="metadataPanel"></div>
+  </div>
+
+  <script>
+    tsParticles.load("tsparticles", {
+      background: { color: { value: "#0f172a" } },
+      fpsLimit: 60,
+      particles: {
+        color: { value: "#00ffff" },
+        links: { enable: true, color: "#00ffff", distance: 150 },
+        move: { enable: true, speed: 1 },
+        size: { value: 2 },
+        number: { value: 60 }
+      },
+      interactivity: { events: { onHover: { enable: true, mode: "repulse" } } },
+      detectRetina: true
+    });
+
+    (() => {
+      const audioFile = document.getElementById('audioFile');
+      const fileName = document.getElementById('file-name');
+      const submitBtn = document.getElementById('submitBtn');
+      const chatContainer = document.getElementById('chatContainer');
+      const statusIndicator = document.getElementById('status');
+      const metadataPanel = document.getElementById('metadataPanel');
+      const appSelector = document.getElementById('appSelector');
+      const voiceType = document.getElementById('voiceType');
+      const translateSelector = document.getElementById('translateSelector');
+      const deviceIdInput = document.getElementById('deviceIdInput');
+      const serverAddressInput = document.getElementById('serverAddress');
+      const ttsSpeedRange = document.getElementById('ttsSpeedRange'); // 新增
+      const ttsSpeedInput = document.getElementById('ttsSpeedInput'); // 新增
+      const manualInput = document.getElementById('manualInput');
+      const sendBtn = document.getElementById('sendBtn');
+
+      let metadata = { data: [], parameters: null };
+      let messageQueue = []; 
+      let isProcessing = false;
+      let currentAudio = null;
+      let currentBotMessageDiv = null; 
+      let spanIdCounter = 0; 
+      // Store accumulated raw text for the current bot message
+      let accumulatedBotText = ''; 
+      // Store mapping of audio chunk IDs to their original raw text
+      let audioSegmentMap = new Map(); 
+
+      // 同步滑块和输入框的值
+      ttsSpeedRange.addEventListener('input', () => {
+        ttsSpeedInput.value = ttsSpeedRange.value;
+      });
+
+      ttsSpeedInput.addEventListener('input', () => {
+        let value = parseFloat(ttsSpeedInput.value);
+        if (isNaN(value)) value = 1.0;
+        if (value < 1.0) value = 1.0;
+        if (value > 2.0) value = 2.0;
+        ttsSpeedInput.value = value.toFixed(1); // 保留一位小数
+        ttsSpeedRange.value = value.toFixed(1);
+      });
+
+
+      async function initAppSelector() {
+        try {
+          const serverAddress = serverAddressInput.value.trim();
+          const deviceId = deviceIdInput.value;
+          const res = await fetch(`${serverAddress}/api/device/devices/${encodeURIComponent(deviceId)}`);
+          const json = await res.json();
+          appSelector.innerHTML = '';
+          json.apps.forEach(app => {
+            const option = document.createElement('option');
+            option.value = app.api_key;
+            option.textContent = app.name;
+            appSelector.appendChild(option);
+          });
+        } catch (e) {
+          appSelector.innerHTML = '<option>加载失败</option>';
+        }
+      }
+
+      audioFile.addEventListener('change', () => {
+        if (audioFile.files[0]) {
+          fileName.textContent = audioFile.files[0].name;
+          submitBtn.disabled = false;
+        }
+      });
+
+      submitBtn.addEventListener('click', async () => {
+        if (!audioFile.files[0] || !appSelector.value) return;
+        
+        chatContainer.innerHTML = '';
+        metadataPanel.innerHTML = '';
+        currentBotMessageDiv = null;
+        statusIndicator.classList.remove('hidden');
+        messageQueue = [];
+        isProcessing = false;
+        spanIdCounter = 0;
+        accumulatedBotText = ''; // Reset for new conversation
+        audioSegmentMap.clear(); // Clear map for new conversation
+
+        const formData = new FormData();
+        formData.append('audio_file', audioFile.files[0]);
+
+        const serverAddress = serverAddressInput.value.trim();
+        // 获取 tts_speed 的值
+        const ttsSpeedValue = parseFloat(ttsSpeedInput.value).toFixed(1); // 确保是浮点数并保留一位小数
+
+        const res = await fetch(`${serverAddress}/v2/tts`, {
+          method: 'POST',
+          body: formData,
+          headers: {
+            'reference_id': voiceType.value,
+            'dify_api_key': appSelector.value,
+            'user_id': deviceIdInput.value,
+			'tts_speed': ttsSpeedValue, // 使用动态值
+            'translate': translateSelector.value // 结果翻译语言
+          }
+        });
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            // Process any remaining buffer content
+            const events = buffer.split('\n\n');
+            for (const event of events) {
+              if (event.trim() === '') continue;
+              try {
+                const data = JSON.parse(event.replace(/^data: /, '').trim());
+
+                if (data.event === 'message') {
+                  if (data.question) {
+                    addQuestionMessage(data.question);
+                    currentBotMessageDiv = null;
+                    accumulatedBotText = ''; // Reset for new bot message
+                    audioSegmentMap.clear(); // Clear map for new bot message
+                  }
+                  if (data.answer) {
+                    appendBotMessageChunk(data);
+                  }
+                } else if (data.event === 'parameters') {
+                  metadata.parameters = data;
+                } else if (data.event === 'image_link') {
+                  displayMedia('image', data.link_data);
+                } else if (data.event === 'video_link') {
+                  displayMedia('video', data.link_data);
+                } else if (data.data) {
+                  metadata.data = data.data;
+                }
+              } catch (err) {
+                console.error("Error parsing SSE event:", err, "Event:", event);
+              }
+            }
+            break;
+          }
+          buffer += decoder.decode(value);
+          const events = buffer.split('\n\n');
+          buffer = events.pop() || '';
+          for (const event of events) {
+            if (event.trim() === '') continue;
+            try {
+              const data = JSON.parse(event.replace(/^data: /, '').trim());
+
+              if (data.event === 'message') {
+                if (data.question) {
+                  addQuestionMessage(data.question);
+                  currentBotMessageDiv = null;
+                  accumulatedBotText = ''; // Reset for new bot message
+                  audioSegmentMap.clear(); // Clear map for new bot message
+                }
+                if (data.answer) {
+                  appendBotMessageChunk(data);
+                }
+              } else if (data.event === 'parameters') {
+                metadata.parameters = data;
+              } else if (data.event === 'image_link') {
+                displayMedia('image', data.link_data);
+              } else if (data.event === 'video_link') {
+                displayMedia('video', data.link_data);
+              } else if (data.data) {
+                metadata.data = data.data;
+              }
+            } catch (err) {
+              console.error("Error parsing SSE event:", err, "Event:", event);
+            }
+          }
+        }
+
+        statusIndicator.classList.add('hidden');
+        showMetadata();
+      });
+
+      function addQuestionMessage(question) {
+        const questionDiv = document.createElement('div');
+        questionDiv.className = 'flex justify-end mb-4 animate__animated animate__fadeInRight';
+        questionDiv.innerHTML = `
+          <div class="bg-sky-600/80 backdrop-blur-md rounded-xl p-4 max-w-2xl shadow-lg text-left">
+              <p class="font-bold text-cyan-200 mb-2 flex items-center gap-2"><i class="fas fa-user"></i> 您</p>
+              <div class="prose prose-invert max-w-none text-white">${marked.parse(question)}</div>
+          </div>
+        `;
+        chatContainer.appendChild(questionDiv);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+      }
+      
+      function appendBotMessageChunk(data) {
+        // 1. Ensure the bot message bubble exists
+        if (!currentBotMessageDiv) {
+          const botMessageWrapper = document.createElement('div');
+          botMessageWrapper.className = 'flex justify-start mb-4 animate__animated animate__fadeInLeft';
+          botMessageWrapper.innerHTML = `
+            <div class="bg-slate-700/80 backdrop-blur-md rounded-xl p-4 max-w-2xl shadow-lg text-left">
+                <p class="font-bold text-teal-300 mb-2 flex items-center gap-2"><i class="fas fa-robot"></i> 智能助手</p>
+                <div class="prose prose-invert max-w-none text-white"></div>
+            </div>
+          `;
+          chatContainer.appendChild(botMessageWrapper);
+          currentBotMessageDiv = botMessageWrapper.querySelector('.prose');
+          accumulatedBotText = ''; // Reset for a new bot message
+          audioSegmentMap.clear(); // Clear map for a new bot message
+        }
+        
+        let textContent = data.answer || ''; // Ensure it's a string, not undefined
+        if (data.greeting) {
+           textContent = (textContent ? '\n\n' + textContent : ''); 
+        }
+
+        const currentSpanId = `audio-span-${spanIdCounter++}`;
+        
+        // Append a placeholder for the current chunk to the raw text
+        // This placeholder will be used to locate and wrap the text after markdown rendering
+        accumulatedBotText += `${textContent}`;
+        
+        // Store the original text and its span ID for later use
+        audioSegmentMap.set(currentSpanId, textContent);
+
+        // Render the entire accumulated text with markdown
+        let markdownRenderedHtml = marked.parse(accumulatedBotText);
+
+        // Now, replace the placeholders with actual span elements for highlighting
+        // This regex ensures we only wrap the content *within* the markdown output
+        // It's crucial that marked.js doesn't significantly alter the placeholder comments
+        audioSegmentMap.forEach((originalChunkText, id) => {
+            // Escape originalChunkText for regex, as it might contain special characters
+            const escapedOriginalText = originalChunkText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const regex = new RegExp(`(${escapedOriginalText})`, 'g');
+            markdownRenderedHtml = markdownRenderedHtml.replace(regex, `<span id="${id}">$1</span>`);
+        });
+
+        currentBotMessageDiv.innerHTML = markdownRenderedHtml;
+
+        // Add to message queue if there's audio
+        let shouldProcessQueue = false;
+        if (data.url) {
+          messageQueue.push({ url: data.url, spanId: currentSpanId });
+          shouldProcessQueue = true;
+        }
+        
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+
+        if (shouldProcessQueue) {
+          processAudioQueue();
+        }
+      }
+
+      async function processAudioQueue() {
+        if (isProcessing || messageQueue.length === 0) return;
+        isProcessing = true;
+        while (messageQueue.length > 0) {
+          const { url, spanId } = messageQueue.shift();
+          await playAudio(url, spanId);
+        }
+        isProcessing = false;
+      }
+
+      function playAudio(url, spanId) {
+        return new Promise((resolve) => {
+          if (currentAudio) {
+            currentAudio.pause();
+            currentAudio = null;
+          }
+          const audio = new Audio(url);
+          currentAudio = audio;
+
+          const spanElement = document.getElementById(spanId);
+
+          if (spanElement) {
+            spanElement.classList.add('playing-audio-text');
+          }
+
+          const onFinish = () => {
+            if (spanElement) {
+              spanElement.classList.remove('playing-audio-text');
+            }
+            resolve();
+          };
+
+          audio.addEventListener('ended', onFinish);
+          audio.addEventListener('error', onFinish);
+          audio.play().catch(onFinish);
+        });
+      }
+
+      function displayMedia(type, linkData) {
+        if (!linkData || !linkData.url) return;
+        const container = document.createElement('div');
+        container.className = 'mt-4';
+        if (type === 'image') {
+          container.innerHTML = `<p class='text-sm text-cyan-300'>📷 ${linkData.title || '图片'}：</p><img src="${linkData.url}" alt="${linkData.title}" class="rounded-lg w-2/4 border mt-2">`;
+        } else if (type === 'video') {
+          container.innerHTML = `<p class='text-sm text-cyan-300'>🎬 ${linkData.title || '视频'}：</p><video src="${linkData.url}" controls class="rounded-lg w-full max-w-2xl mt-2"></video>`;
+        }
+        chatContainer.appendChild(container);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+      }
+
+      function showMetadata() {
+        let html = '';
+        if (metadata.parameters) {
+          html += `<div class='bg-cyan-900/30 p-4 rounded-lg shadow-md mb-4'>`;
+          html += `<h2 class='section-title'>🤖 开场白</h2><p class='text-white'>${metadata.parameters.opening_statement}</p>`;
+          html += `<h3 class='mt-4 font-semibold text-cyan-300'>🧭 建议提问：</h3><ul class='list-none'>`;
+          metadata.parameters.suggested_questions.forEach(q => {
+            html += `<li class='clickable-question mb-2 p-2 rounded cursor-pointer transition-colors duration-200 hover:bg-cyan-800/50 hover:text-cyan-100' data-question="${q.replace(/"/g, '&quot;')}">• ${q}</li>`;
+          });
+          html += `</ul></div>`;
+        }
+        if (metadata.data.length) {
+          html += `<div class='bg-cyan-900/20 p-4 rounded-lg shadow-md'>`;
+          html += `<h3 class='font-semibold text-cyan-300 mb-2'>🎯 猜你想问：</h3><ul class='list-none'>`;
+          metadata.data.forEach(d => {
+            html += `<li class='clickable-question mb-2 p-2 rounded cursor-pointer transition-colors duration-200 hover:bg-cyan-800/50 hover:text-cyan-100' data-question="${d.replace(/"/g, '&quot;')}">• ${d}</li>`;
+          });
+          html += `</ul></div>`;
+        }
+        metadataPanel.innerHTML = html;
+        
+        // Add event listeners for clickable questions
+        metadataPanel.querySelectorAll('.clickable-question').forEach(item => {
+          item.addEventListener('click', () => {
+            const question = item.getAttribute('data-question');
+            sendQuestion(question);
+          });
+        });
+      }
+
+      window.sendQuestion = async function(question) {
+        const serverAddress = serverAddressInput.value.trim();
+        if (!serverAddress) {
+          Swal.fire({ icon: 'warning', title: '请先设置服务器地址', toast: true, position: 'top-end', timer: 2000, showConfirmButton: false });
+          return;
+        }
+        
+        statusIndicator.classList.remove('hidden');
+        
+        try {
+          const ttsSpeedValue = parseFloat(ttsSpeedInput.value).toFixed(1);
+          const response = await fetch(`${serverAddress}/v2/llm-streaming?text=${encodeURIComponent(question)}`, {
+            method: 'GET',
+            headers: {
+              'reference_id': voiceType.value,
+              'dify_api_key': appSelector.value,
+              'user_id': deviceIdInput.value,
+              'tts_speed': ttsSpeedValue,
+              'translate': translateSelector.value
+            }
+          });
+          
+          if (!response.ok) throw new Error('Network response was not ok');
+          
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value);
+            const events = buffer.split('\n\n');
+            buffer = events.pop() || '';
+            
+            for (const event of events) {
+              if (event.trim() === '') continue;
+              try {
+                const data = JSON.parse(event.replace(/^data: /, '').trim());
+                
+                if (data.event === 'message') {
+                  if (data.question) {
+                    addQuestionMessage(data.question);
+                    currentBotMessageDiv = null;
+                    accumulatedBotText = '';
+                    audioSegmentMap.clear();
+                  }
+                  if (data.answer) {
+                    appendBotMessageChunk(data);
+                  }
+                }
+              } catch (err) {
+                console.error("Error parsing SSE event:", err, "Event:", event);
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Error sending question:', error);
+          Swal.fire({ icon: 'error', title: '发送失败', toast: true, position: 'top-end', timer: 2000, showConfirmButton: false });
+        } finally {
+          statusIndicator.classList.add('hidden');
+        }
+      }
+
+      sendBtn.addEventListener('click', () => {
+        const question = manualInput.value.trim();
+        if (question) {
+          sendQuestion(question);
+          manualInput.value = '';
+        }
+      });
+
+      manualInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+          const question = manualInput.value.trim();
+          if (question) {
+            sendQuestion(question);
+            manualInput.value = '';
+          }
+        }
+      });
+
+      document.getElementById('clearCacheBtn').addEventListener('click', async () => {
+        const serverAddress = serverAddressInput.value.trim();
+        try {
+          const res = await fetch(`${serverAddress}/utils/chear`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: '123', order: '清空缓存' })
+          });
+          if (res.ok) {
+            Swal.fire({ icon: 'success', title: '缓存清除成功', toast: true, position: 'top-end', timer: 2000, showConfirmButton: false });
+          } else {
+            Swal.fire({ icon: 'error', title: '清除失败', toast: true, position: 'top-end', timer: 2000, showConfirmButton: false });
+          }
+        } catch (err) {
+          Swal.fire({ icon: 'error', title: '请求出错', toast: true, position: 'top-end', timer: 2000, showConfirmButton: false });
+        }
+      });
+
+      initAppSelector();
+      serverAddressInput.addEventListener('input', initAppSelector);
+    })();
+  </script>
+</body>
+</html>
