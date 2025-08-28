@@ -226,8 +226,23 @@ async def llm_streaming(*, request:Request, text:str):
         headers={"X-Stream-Data": "true"}
     )
 async def generate_stream(*, request, text, skip_question=False):
+    """
+    生成流式响应的核心函数。
+    它首先检查缓存，如果命中则直接返回缓存数据。
+    如果未命中，它会从LLM服务获取数据，同时流式地将数据返回给客户端，
+    并异步地将数据写入缓存，以提高后续请求的响应速度。
+    增加了可靠的缓存写入机制，以处理潜在的后台任务失败。
+    """
+    async def _safe_store_and_log(coro):
+        """安全地执行缓存写入协程，并在失败时记录错误，而不是让整个流中断。"""
+        try:
+            await coro
+        except Exception as e:
+            logger.error(f"后台缓存写入失败，但这不会中断用户流: {e}", exc_info=True)
+
     cache_key = await generate_cache_key(request=request, text=text)
     cached_data = await get_cached_sse_data(request=request, cache_key=cache_key)
+
     if cached_data:
         logger.info(f"🎯  命中SSE缓存(哈希: {cache_key[-10:]})")
         for data in cached_data:
@@ -236,75 +251,58 @@ async def generate_stream(*, request, text, skip_question=False):
             if skip_question and b'"event": "message"' in data and b'"question":' in data:
                 continue
             yield data
-    else:
-        if text:
-            logger.info(f"💾  处理新的请求并进行缓存(哈希: {cache_key[-10:]})")
-            buffer = []
-            buffer_size = 10
+        return
 
-            # async for data in llm_server.chat_messages_streaming(request=request, text=text, skip_question=skip_question):
-            async for data in llm_server.chat_messages_streaming_new(request=request, text=text, skip_question=skip_question):
-                if isinstance(data, str):
-                    data_bytes = data.encode('utf-8')
-                else:
-                    data_bytes = data
-                yield data_bytes
-                buffer.append(data_bytes)
+    if not text:
+        # 如果没有输入文本，则直接从 LLM 获取流（例如，仅获取建议问题）
+        async for data in llm_server.chat_messages_streaming_new(request=request, text=text, skip_question=skip_question):
+            yield data.encode('utf-8') if isinstance(data, str) else data
+        async for parameter in llm_server_other.parameters_(request=request):
+            yield parameter.encode('utf-8') if isinstance(parameter, str) else parameter
+        return
 
-                if len(buffer) >= buffer_size:
-                    asyncio.create_task(store_sse_bulk_data(cache_key, buffer.copy()))
-                    buffer.clear()
+    logger.info(f"💾  处理新的请求并进行缓存(哈希: {cache_key[-10:]})")
+    buffer = []
+    buffer_size = 10
 
-            if buffer:
-                await store_sse_bulk_data(cache_key, buffer)
-                buffer.clear()
-            param_buffer = []
-            async for parameter in llm_server_other.parameters_(request=request):
-                if isinstance(parameter, str):
-                    parameter_bytes = parameter.encode('utf-8')
-                else:
-                    parameter_bytes = parameter
-                yield parameter_bytes
-                param_buffer.append(parameter_bytes)
-            if param_buffer:
-                await store_sse_bulk_data(cache_key, param_buffer, append=True)
-                await redis_client.rpush(cache_key, b"__END_OF_STREAM__")
-        else:
-            # 不写缓存
-            # async for data in llm_server.chat_messages_streaming(request=request, text=text, skip_question=skip_question):
-            async for data in llm_server.chat_messages_streaming_new(request=request, text=text, skip_question=skip_question):
-                if isinstance(data, str):
-                    data_bytes = data.encode('utf-8')
-                else:
-                    data_bytes = data
-                yield data_bytes
-            
-            async for parameter in llm_server_other.parameters_(request=request):
-                if isinstance(parameter, str):
-                    parameter_bytes = parameter.encode('utf-8')
-                else:
-                    parameter_bytes = parameter
-                yield parameter_bytes
+    # 流式处理LLM的响应
+    async for data in llm_server.chat_messages_streaming_new(request=request, text=text, skip_question=skip_question):
+        data_bytes = data.encode('utf-8') if isinstance(data, str) else data
+        yield data_bytes
+        buffer.append(data_bytes)
+
+        if len(buffer) >= buffer_size:
+            asyncio.create_task(_safe_store_and_log(store_sse_bulk_data(cache_key, buffer.copy())))
+            buffer.clear()
+
+    # 处理剩余的缓冲区
+    if buffer:
+        await _safe_store_and_log(store_sse_bulk_data(cache_key, buffer))
+
+    # 流式处理建议问题并完成缓存
+    param_buffer = []
+    async for parameter in llm_server_other.parameters_(request=request):
+        parameter_bytes = parameter.encode('utf-8') if isinstance(parameter, str) else parameter
+        yield parameter_bytes
+        param_buffer.append(parameter_bytes)
+
+    # 将建议问题和结束标记写入缓存
+    if param_buffer:
+        async def _final_cache_write():
+            await store_sse_bulk_data(cache_key, param_buffer, append=True)
+            await redis_client.rpush(cache_key, b"__END_OF_STREAM__")
+
+        await _safe_store_and_log(_final_cache_write())
 
 @router.post("/tts", description="流模式主入口", summary="通过传递音频获取全部(流模式)")
 async def main_router_streaming(request: Request, text: str = Depends(stt_server.audio_to_text)):
-    async def stream_generator():
-        if text:
-            cache_key = await generate_cache_key(request=request, text=text)
-            cached_data = await get_cached_sse_data(request=request, cache_key=cache_key)
-            if cached_data:
-                logger.info(f"🎯  命中完整SSE缓存(哈希: {cache_key[-10:]})")
-                for data in cached_data:
-                    if isinstance(data, str):
-                        data = data.encode('utf-8')
-                    if b'"event": "message"' in data and b'"question":' in data:
-                        continue
-                    yield data
-                return
-        async for data in generate_stream(request=request, text=text, skip_question=False):
-            yield data
+    """
+    主流式接口，整合了 STT -> LLM -> (TTS anwser) 的完整流程。
+    该接口通过调用 generate_stream 并设置 skip_question=True，
+    实现了统一的缓存处理逻辑，并避免了在响应中重复返回用户问题。
+    """
     return StreamingResponse(
-        stream_generator(),
+        generate_stream(request=request, text=text, skip_question=True),
         media_type='text/event-stream',
         headers={"X-Stream-Data": "true"}
     )
